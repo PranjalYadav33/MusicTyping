@@ -19,6 +19,7 @@
     "appId": "com.musictype.app",
     "productName": "MusicType",
     "artifactName": "MusicType-${version}-${os}-${arch}.${ext}",
+    "asar": false,
     "directories": {
       "output": "dist"
     },
@@ -33,9 +34,10 @@
     "files": [
       "main.cjs",
       "preload.cjs",
-      "out/**/*",
+      ".next/**/*",
       "public/**/*",
-      ".bin/**/*"
+      ".bin/**/*",
+      "package.json"
     ]
   },
   "dependencies": {

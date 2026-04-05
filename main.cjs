@@ -183,7 +183,7 @@ async function openYoutubeAuthWindow() {
   });
 }
 
-function createWindow() {
+function createWindow(port) {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -196,12 +196,34 @@ function createWindow() {
     autoHideMenuBar: true,
   });
 
-  const isDev = process.env.NODE_ENV === "development";
+  win.loadURL(`http://localhost:${port}`);
+}
 
+const isDev = process.env.NODE_ENV === "development";
+
+async function runNextAndCreateWindow() {
   if (isDev) {
-    win.loadURL("http://localhost:3000");
+    createWindow(3000);
   } else {
-    win.loadFile(path.join(__dirname, "out/index.html"));
+    // Dynamically require next and http to create the internal production server
+    const next = require("next");
+    const { createServer } = require("http");
+    const { parse } = require("url");
+    
+    // Choose a random internal port so we don't conflict with anything
+    const port = Math.floor(Math.random() * (40000 - 30000 + 1)) + 30000;
+    const nextApp = next({ dev: false, dir: __dirname });
+    const requestHandler = nextApp.getRequestHandler();
+
+    await nextApp.prepare();
+    
+    createServer((req, res) => {
+      const parsedUrl = parse(req.url, true);
+      requestHandler(req, res, parsedUrl);
+    }).listen(port, () => {
+      console.log(`> Ready on http://localhost:${port}`);
+      createWindow(port);
+    });
   }
 }
 
@@ -219,10 +241,10 @@ app.whenReady().then(() => {
     return openYoutubeAuthWindow();
   });
 
-  createWindow();
+  runNextAndCreateWindow();
 
   app.on("activate", function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) runNextAndCreateWindow();
   });
 });
 
