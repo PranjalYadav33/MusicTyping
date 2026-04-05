@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, session } = require("electron");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -183,6 +184,8 @@ async function openYoutubeAuthWindow() {
   });
 }
 
+/* ─── Window & Server ─── */
+
 function createWindow(port) {
   const win = new BrowserWindow({
     width: 1200,
@@ -194,9 +197,15 @@ function createWindow(port) {
       contextIsolation: true,
     },
     autoHideMenuBar: true,
+    show: false,
   });
 
   win.loadURL(`http://localhost:${port}`);
+
+  // Only show when content is ready (avoids white flash)
+  win.once("ready-to-show", () => {
+    win.show();
+  });
 }
 
 const isDev = process.env.NODE_ENV === "development";
@@ -204,27 +213,64 @@ const isDev = process.env.NODE_ENV === "development";
 async function runNextAndCreateWindow() {
   if (isDev) {
     createWindow(3000);
-  } else {
-    // Dynamically require next and http to create the internal production server
-    const next = require("next");
-    const { createServer } = require("http");
-    const { parse } = require("url");
-    
-    // Choose a random internal port so we don't conflict with anything
-    const port = Math.floor(Math.random() * (40000 - 30000 + 1)) + 30000;
-    const nextApp = next({ dev: false, dir: __dirname });
-    const requestHandler = nextApp.getRequestHandler();
-
-    await nextApp.prepare();
-    
-    createServer((req, res) => {
-      const parsedUrl = parse(req.url, true);
-      requestHandler(req, res, parsedUrl);
-    }).listen(port, () => {
-      console.log(`> Ready on http://localhost:${port}`);
-      createWindow(port);
-    });
+    return;
   }
+
+  // ── Production: boot a real Next.js server inside Electron ──
+
+  // Expose the user-data directory for yt-dlp downloads, etc.
+  process.env.MUSICTYPE_USER_DATA = app.getPath("userData");
+
+  // Tell Next.js where the app lives
+  const appDir = __dirname;
+
+  // Verify the .next build exists
+  const dotNextPath = path.join(appDir, ".next");
+  if (!fsSync.existsSync(dotNextPath)) {
+    console.error("FATAL: .next directory not found at", dotNextPath);
+    app.quit();
+    return;
+  }
+
+  const next = require("next");
+  const http = require("http");
+  const { parse } = require("url");
+
+  // Pick a random ephemeral port
+  const port = 30000 + Math.floor(Math.random() * 10000);
+
+  const nextApp = next({
+    dev: false,
+    dir: appDir,
+    hostname: "localhost",
+    port: port,
+  });
+
+  const handler = nextApp.getRequestHandler();
+
+  try {
+    await nextApp.prepare();
+    console.log("[MusicType] Next.js prepared successfully");
+  } catch (err) {
+    console.error("[MusicType] Failed to prepare Next.js:", err);
+    app.quit();
+    return;
+  }
+
+  const server = http.createServer((req, res) => {
+    const parsedUrl = parse(req.url, true);
+    handler(req, res, parsedUrl);
+  });
+
+  server.listen(port, "127.0.0.1", () => {
+    console.log(`[MusicType] Server ready on http://127.0.0.1:${port}`);
+    createWindow(port);
+  });
+
+  // Ensure the server shuts down cleanly
+  app.on("before-quit", () => {
+    server.close();
+  });
 }
 
 app.whenReady().then(() => {

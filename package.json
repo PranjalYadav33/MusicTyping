@@ -1,6 +1,8 @@
 {
   "name": "musictype",
   "version": "0.0.1",
+  "description": "Type along to the lyrics of your favorite songs and improve your typing speed",
+  "author": "PranjalYadav33",
   "type": "module",
   "private": true,
   "main": "main.cjs",
@@ -19,6 +21,7 @@
     "appId": "com.musictype.app",
     "productName": "MusicType",
     "artifactName": "MusicType-${version}-${os}-${arch}.${ext}",
+    "asar": false,
     "directories": {
       "output": "dist"
     },
@@ -28,14 +31,18 @@
     },
     "mac": {
       "target": "dmg",
-      "icon": "public/logo.png"
+      "icon": "public/logo.png",
+      "identity": null
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "AudioVideo"
     },
     "files": [
       "main.cjs",
       "preload.cjs",
       ".next/**/*",
       "public/**/*",
-      ".bin/**/*",
       "package.json"
     ]
   },

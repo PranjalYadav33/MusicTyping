@@ -17,10 +17,20 @@ import os from "node:os";
 
 let binaryDlpPath = "";
 
+/**
+ * Resolves the writable base directory for storing downloaded binaries.
+ * In production Electron: uses MUSICTYPE_USER_DATA (set by main.cjs → app.getPath('userData'))
+ * In development: uses process.cwd()
+ */
+function getBinDir(): string {
+  const base = process.env.MUSICTYPE_USER_DATA || process.cwd();
+  return path.join(base, ".bin");
+}
+
 async function ensureYtDlp(): Promise<string> {
   if (binaryDlpPath && fs.existsSync(binaryDlpPath)) return binaryDlpPath;
 
-  const binDir = path.join(process.cwd(), ".bin");
+  const binDir = getBinDir();
   if (!fs.existsSync(binDir)) {
     fs.mkdirSync(binDir, { recursive: true });
   }
@@ -44,14 +54,14 @@ async function ensureYtDlp(): Promise<string> {
     return binaryPath;
   }
 
-  console.log(`Downloading yt-dlp from ${downloadUrl}...`);
+  console.log(`[MusicType] Downloading yt-dlp to ${binaryPath}...`);
   const res = await fetch(downloadUrl);
   if (!res.ok) throw new Error("Failed to download yt-dlp: " + res.statusText);
   const buffer = Buffer.from(await res.arrayBuffer());
   fs.writeFileSync(binaryPath, buffer);
   if (platform !== "win32") fs.chmodSync(binaryPath, 0o755);
-  
-  console.log("yt-dlp downloaded to", binaryPath);
+
+  console.log("[MusicType] yt-dlp ready at", binaryPath);
   binaryDlpPath = binaryPath;
   return binaryPath;
 }
