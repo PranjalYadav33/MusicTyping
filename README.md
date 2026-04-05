@@ -3,9 +3,14 @@
   <h1>MusicType</h1>
   <p><strong>Type the lyrics. Feel the beat.</strong></p>
   <p>A premium, high-performance music typing app combining the aesthetic of Monkeytype with live lyric-synchronized typing.</p>
+  
+  <h3>
+    <a href="https://github.com/PranjalYadav33/MusicTyping/releases/latest">🚀 Download the Latest Release (Windows, macOS, Linux)</a>
+  </h3>
 </div>
 
 ---
+
 
 > [!WARNING]
 > **PRE-ALPHA SOFTWARE**  
@@ -23,14 +28,10 @@
 
 This is a hybridized Next.js and Electron project. Ensure you have `Node.js` installed.
 
-1. **Clone the repository:**
-   ```bash
-   git clone https:/PranjalYadav33/github.com//MusicType.git
-   cd MusicType
-   ```
-
 2. **Install dependencies:**
    ```bash
+   git clone https://github.com/PranjalYadav33/MusicTyping.git
+   cd MusicTyping
    npm install
    ```
 
