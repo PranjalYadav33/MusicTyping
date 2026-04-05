@@ -19,7 +19,6 @@
     "appId": "com.musictype.app",
     "productName": "MusicType",
     "artifactName": "MusicType-${version}-${os}-${arch}.${ext}",
-    "asar": false,
     "directories": {
       "output": "dist"
     },
