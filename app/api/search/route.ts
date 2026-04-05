@@ -23,7 +23,8 @@ async function getYtMusicApi() {
   if (!ytmusicInitPromise) {
     ytmusicInitPromise = (async () => {
       try {
-        const YTMusic = (await import("ytmusic-api")).default;
+        const ytmusicLib = require("ytmusic-api");
+        const YTMusic = ytmusicLib.default || ytmusicLib;
         const api = new YTMusic();
         await api.initialize();
         ytmusicInstance = api;
@@ -61,7 +62,8 @@ async function searchWithYtMusic(q: string): Promise<SearchSong[]> {
 /* ─── play-dl (fallback) ─── */
 
 async function searchWithPlayDl(q: string): Promise<SearchSong[]> {
-  const play = (await import("play-dl")).default;
+  const playLib = require("play-dl");
+  const play = playLib.default || playLib;
 
   const videos = await play.search(q, {
     source: { youtube: "video" },
