@@ -3,6 +3,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const http = require("node:http");
 
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
@@ -200,9 +201,9 @@ function createWindow(port) {
     show: false,
   });
 
-  win.loadURL(`http://localhost:${port}`);
+  win.loadURL(`http://127.0.0.1:${port}`);
 
-  // Only show when content is ready (avoids white flash)
+  // Only show when the page is actually rendered (no white flash)
   win.once("ready-to-show", () => {
     win.show();
   });
@@ -210,67 +211,71 @@ function createWindow(port) {
 
 const isDev = process.env.NODE_ENV === "development";
 
+/**
+ * Polls a local port until the HTTP server is accepting connections.
+ */
+function waitForServer(port, maxRetries = 50) {
+  return new Promise((resolve, reject) => {
+    let attempt = 0;
+    const check = () => {
+      attempt++;
+      const req = http.get(`http://127.0.0.1:${port}/`, (res) => {
+        res.resume();
+        resolve();
+      });
+      req.on("error", () => {
+        if (attempt >= maxRetries) {
+          reject(new Error(`Server not ready after ${maxRetries} retries`));
+        } else {
+          setTimeout(check, 300);
+        }
+      });
+      req.end();
+    };
+    check();
+  });
+}
+
 async function runNextAndCreateWindow() {
   if (isDev) {
     createWindow(3000);
     return;
   }
 
-  // ── Production: boot a real Next.js server inside Electron ──
+  // ── Production: start the Next.js standalone server ──
 
   // Expose the user-data directory for yt-dlp downloads, etc.
   process.env.MUSICTYPE_USER_DATA = app.getPath("userData");
 
-  // Tell Next.js where the app lives
-  const appDir = __dirname;
+  const standaloneDir = path.join(__dirname, ".next", "standalone");
+  const serverJs = path.join(standaloneDir, "server.js");
 
-  // Verify the .next build exists
-  const dotNextPath = path.join(appDir, ".next");
-  if (!fsSync.existsSync(dotNextPath)) {
-    console.error("FATAL: .next directory not found at", dotNextPath);
+  if (!fsSync.existsSync(serverJs)) {
+    console.error("[MusicType] FATAL: standalone server.js not found at", serverJs);
     app.quit();
     return;
   }
-
-  const next = require("next");
-  const http = require("http");
-  const { parse } = require("url");
 
   // Pick a random ephemeral port
   const port = 30000 + Math.floor(Math.random() * 10000);
 
-  const nextApp = next({
-    dev: false,
-    dir: appDir,
-    hostname: "localhost",
-    port: port,
-  });
+  // Configure the standalone server via env vars (it reads these on startup)
+  process.env.PORT = String(port);
+  process.env.HOSTNAME = "127.0.0.1";
 
-  const handler = nextApp.getRequestHandler();
+  // Boot the standalone Next.js server
+  console.log(`[MusicType] Starting standalone server on port ${port}...`);
+  require(serverJs);
 
+  // Wait until it's accepting connections, then show the window
   try {
-    await nextApp.prepare();
-    console.log("[MusicType] Next.js prepared successfully");
-  } catch (err) {
-    console.error("[MusicType] Failed to prepare Next.js:", err);
-    app.quit();
-    return;
-  }
-
-  const server = http.createServer((req, res) => {
-    const parsedUrl = parse(req.url, true);
-    handler(req, res, parsedUrl);
-  });
-
-  server.listen(port, "127.0.0.1", () => {
+    await waitForServer(port);
     console.log(`[MusicType] Server ready on http://127.0.0.1:${port}`);
     createWindow(port);
-  });
-
-  // Ensure the server shuts down cleanly
-  app.on("before-quit", () => {
-    server.close();
-  });
+  } catch (err) {
+    console.error("[MusicType] Server failed to start:", err);
+    app.quit();
+  }
 }
 
 app.whenReady().then(() => {

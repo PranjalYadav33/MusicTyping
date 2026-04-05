@@ -6,6 +6,10 @@ import {
   Search, Keyboard, Music2, Loader2, Play, Pause,
   SkipForward, RotateCcw, ChevronDown, BarChart3, RefreshCw,
 } from "lucide-react";
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, Cell
+} from "recharts";
 
 /* ─────────────────────────────────────────
    TYPES
@@ -47,41 +51,47 @@ const PROVIDERS: { id: LyricsProvider; label: string }[] = [
 ];
 
 /* ─────────────────────────────────────────
-   TINY SVG GRAPH COMPONENTS
+   RESULTS SCREEN (ENHANCED UI/UX)
 ───────────────────────────────────────── */
-function GraphLine({ data, color, label, max }: {
-  data: number[]; color: string; label: string; max: number;
-}) {
-  if (data.length < 2) return null;
-  const W = 600; const H = 120;
-  const pad = { t: 8, b: 8, l: 0, r: 0 };
-  const w = W - pad.l - pad.r;
-  const h = H - pad.t - pad.b;
-  const pts = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * w + pad.l;
-    const y = h - (v / (max || 1)) * h + pad.t;
-    return `${x},${y}`;
-  });
-  const areaBottom = h + pad.t;
-  const d = `M${pts.join("L")}`;
-  const area = `M${pts[0]}L${pts.join("L")}L${(data.length - 1) / (data.length - 1) * w + pad.l},${areaBottom}L${pad.l},${areaBottom}Z`;
-  return (
-    <g>
-      <defs>
-        <linearGradient id={`grad-${label}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#grad-${label})`} />
-      <path d={d} stroke={color} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </g>
-  );
-}
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-[#1e1e1e]/90 backdrop-blur-md border border-[#3a3c3f] p-4 rounded-xl shadow-2xl">
+        <p className="text-[#646669] text-xs font-semibold mb-3 tracking-widest uppercase">{label}</p>
+        <div className="flex flex-col gap-2">
+          {payload.map((entry: any, index: number) => (
+            <div key={index} className="flex items-center justify-between gap-6 text-sm font-medium">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full shadow-sm" style={{ background: entry.color, boxShadow: `0 0 8px ${entry.color}` }} />
+                <span style={{ color: entry.color }} className="capitalize">{entry.name}:</span>
+              </div>
+              <span className="text-[#d1d0c5] tabular-nums text-right">{entry.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
 
-/* ─────────────────────────────────────────
-   RESULTS SCREEN
-───────────────────────────────────────── */
+const DistTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-[#1e1e1e]/90 backdrop-blur border border-[#3a3c3f] px-3 py-2 rounded-lg shadow-xl">
+        <div className="text-[#d1d0c5] text-xs font-medium">
+          <span style={{ color: data.fill }}>{data.wpmAt}</span> wpm
+        </div>
+        <div className="text-[#646669] text-xs">
+          Hit <span className="text-[#d1d0c5] font-semibold">{data.count}</span> times
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
+
 function ResultsScreen({
   song,
   wordResults,
@@ -100,16 +110,12 @@ function ResultsScreen({
   const totalChars = wordResults.reduce((s, w) => s + w.word.length, 0);
   const correctChars = wordResults.filter((w) => w.correct).reduce((s, w) => s + w.word.length, 0);
   const accuracy = totalChars > 0 ? Math.round((correctChars / totalChars) * 100) : 0;
+  
+  const wpmData = metrics.map((m) => m.wpm);
   const avgWpm = wordResults.length > 0
     ? Math.round(wordResults.reduce((s, w) => s + w.wpm, 0) / wordResults.length)
     : 0;
   const peakWpm = Math.max(...wordResults.map((w) => w.wpm), 0);
-
-  const wpmData = metrics.map((m) => m.wpm);
-  const accData = metrics.map((m) => m.accuracy);
-  const errData = metrics.map((m) => m.errors);
-  const maxWpm = Math.max(...wpmData, 60);
-  const maxErr = Math.max(...errData, 1);
 
   // Consistency = 1 - (std_dev / mean) clamped
   const mean = avgWpm || 1;
@@ -117,151 +123,218 @@ function ResultsScreen({
   const stdDev = Math.sqrt(variance);
   const consistency = Math.max(0, Math.round((1 - stdDev / mean) * 100));
 
-  const ticks = [0, 25, 50, 75, 100].map((pct) => ({
-    val: Math.round((maxWpm * pct) / 100),
-    y: 120 - (pct / 100) * 112 + 8,
+  // Graph Data Formatter
+  const chartData = metrics.map((m) => ({
+    time: `${m.second}s`,
+    wpm: m.wpm,
+    accuracy: m.accuracy,
+    errors: m.errors
   }));
 
+  // WPM Distribution Data
+  const buckets = 20;
+  const minWpm = Math.min(...wpmData, 0);
+  const maxWpm = Math.max(...wpmData, 60);
+  const range = (maxWpm - minWpm) || 1;
+  const distCounts = new Array(buckets).fill(0);
+  wpmData.forEach(v => {
+    const b = Math.min(Math.floor(((v - minWpm) / range) * buckets), buckets - 1);
+    distCounts[b]++;
+  });
+  
+  const distData = distCounts.map((c, i) => ({
+    wpmAt: Math.round(minWpm + (i / buckets) * range),
+    count: c,
+    fill: `hsla(${43 + i * 2}, 80%, ${45 + i}%, 0.85)`
+  }));
+
+  const accColor = accuracy >= 90 ? "#7ec984" : accuracy >= 70 ? "#e2b714" : "#ca4343";
+
   return (
-    <div className="w-full max-w-3xl mx-auto flex flex-col gap-8 animate-in fade-in duration-500 px-2">
-      {/* Song header */}
-      <div className="flex items-center gap-4">
+    <div className="w-full max-w-5xl mx-auto flex flex-col gap-8 animate-in slide-in-from-bottom-8 fade-in duration-700 px-4 pb-20">
+      
+      {/* ── Header Card ── */}
+      <div className="relative overflow-hidden rounded-2xl bg-[#2c2e31]/80 backdrop-blur-xl border border-[#3a3c3f]/50 p-6 sm:p-8 flex flex-col sm:flex-row items-center sm:items-stretch gap-6 shadow-2xl">
         {song.thumbnail && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={song.thumbnail} alt="" className="w-14 h-14 rounded-xl object-cover" />
+          <div className="absolute top-0 right-0 bottom-0 w-1/2 opacity-10 pointer-events-none fade-mask-left">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={song.thumbnail} alt="" className="w-full h-full object-cover" />
+          </div>
         )}
-        <div>
-          <div className="text-lg font-bold" style={{ color: "#d1d0c5" }}>{song.name}</div>
-          <div className="text-sm" style={{ color: "#646669" }}>{song.artistName}</div>
+        
+        {song.thumbnail && (
+          <div className="relative w-24 h-24 sm:w-32 sm:h-32 shrink-0 rounded-2xl overflow-hidden shadow-xl ring-1 ring-white/10 group">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={song.thumbnail} alt="" className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" />
+          </div>
+        )}
+        <div className="flex flex-col justify-center text-center sm:text-left z-10 flex-1">
+          <div className="text-sm font-semibold tracking-widest uppercase mb-1" style={{ color: "#e2b714" }}>Result Summary</div>
+          <div className="text-3xl sm:text-4xl font-black tracking-tight text-white mb-2 line-clamp-1">{song.name}</div>
+          <div className="text-lg font-medium" style={{ color: "#a0a09b" }}>{song.artistName}</div>
         </div>
-        <div className="ml-auto flex gap-3">
+        <div className="flex sm:flex-col justify-center gap-3 z-10 w-full sm:w-auto mt-4 sm:mt-0">
           <button onClick={onRetry}
-            className="flex items-center gap-2 text-sm px-4 py-2 rounded-lg transition-all hover:brightness-110"
-            style={{ background: "#2c2e31", color: "#646669", border: "1px solid #3a3c3f" }}>
-            <RotateCcw size={14} /> retry
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 text-sm px-6 py-3 rounded-xl font-semibold transition-all hover:scale-[1.02] active:scale-[0.98]"
+            style={{ background: "#2c2e31", color: "#d1d0c5", border: "1px solid #4a4c4f" }}>
+            <RotateCcw size={16} /> Retry
           </button>
           <button onClick={onNew}
-            className="flex items-center gap-2 text-sm px-4 py-2 rounded-lg transition-all hover:brightness-110"
-            style={{ background: "#e2b714", color: "#323437", fontWeight: 600 }}>
-            <Search size={14} /> new song
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 text-sm px-6 py-3 rounded-xl font-bold transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-[#e2b714]/20"
+            style={{ background: "#e2b714", color: "#1e1e1e" }}>
+            <Search size={16} /> Next Song
           </button>
         </div>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      {/* ── Main Stats ── */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
-          { label: "avg wpm", value: avgWpm, color: "#e2b714" },
-          { label: "peak wpm", value: peakWpm, color: "#7ec984" },
-          { label: "accuracy", value: `${accuracy}%`, color: accuracy >= 80 ? "#7ec984" : accuracy >= 50 ? "#e2b714" : "#ca4343" },
-          { label: "consistency", value: `${consistency}%`, color: "#58c4f5" },
-          { label: "words typed", value: `${correctWords}/${totalWords}`, color: "#d1d0c5" },
+          { label: "WPM", value: avgWpm, color: "#e2b714" },
+          { label: "Peak WPM", value: peakWpm, color: "#7ec984" },
+          { label: "Accuracy", value: `${accuracy}%`, color: accColor },
+          { label: "Consistency", value: `${consistency}%`, color: "#58c4f5" },
+          { label: "Words Typed", value: `${correctWords}/${totalWords}`, color: "#d1d0c5" },
         ].map((s) => (
-          <div key={s.label} className="rounded-xl p-4 flex flex-col gap-1" style={{ background: "#2c2e31" }}>
-            <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
-            <div className="text-xs" style={{ color: "#646669" }}>{s.label}</div>
+          <div key={s.label} className="relative rounded-2xl p-6 flex flex-col justify-center items-center text-center bg-[#2c2e31]/60 border border-[#3a3c3f]/50 backdrop-blur hover:bg-[#2c2e31] transition-colors group overflow-hidden">
+            <div className="absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-500" style={{ background: `radial-gradient(circle at center, ${s.color} 0%, transparent 70%)` }} />
+            <div className="text-4xl font-black mb-2 DropShadow-lg transition-transform duration-300 group-hover:scale-110" style={{ color: s.color, filter: `drop-shadow(0 0 12px ${s.color}40)` }}>
+              {s.value}
+            </div>
+            <div className="text-xs font-semibold tracking-widest uppercase" style={{ color: "#646669" }}>
+              {s.label}
+            </div>
           </div>
         ))}
       </div>
 
-      {/* WPM over time graph */}
-      <div className="rounded-xl p-5" style={{ background: "#2c2e31" }}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: "#d1d0c5" }}>
-            <BarChart3 size={16} style={{ color: "#e2b714" }} /> performance over time
+      {/* ── Performance Chart ── */}
+      <div className="rounded-2xl p-6 sm:p-8 bg-[#2c2e31]/60 border border-[#3a3c3f]/50 backdrop-blur">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 pb-4 border-b border-[#3a3c3f]/30">
+          <div className="flex items-center gap-3 text-lg font-bold" style={{ color: "#d1d0c5" }}>
+            <BarChart3 className="text-[#e2b714]" size={22} />
+            Performance Over Time
           </div>
-          <div className="flex items-center gap-4 text-xs" style={{ color: "#646669" }}>
-            <span className="flex items-center gap-1"><span className="w-3 h-0.5 inline-block rounded" style={{ background: "#e2b714" }} /> wpm</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-0.5 inline-block rounded" style={{ background: "#7ec984" }} /> accuracy %</span>
-            <span className="flex items-center gap-1"><span className="w-3 h-0.5 inline-block rounded" style={{ background: "#ca4343" }} /> errors</span>
+          <div className="flex flex-wrap items-center gap-5 text-sm font-medium mt-4 sm:mt-0" style={{ color: "#a0a09b" }}>
+            <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm shadow-[0_0_8px_#e2b714]" style={{ background: "#e2b714" }} /> WPM</span>
+            <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm shadow-[0_0_8px_#7ec984]" style={{ background: "#7ec984" }} /> Accuracy %</span>
+            <span className="flex items-center gap-2"><span className="w-3 h-3 rounded-sm shadow-[0_0_8px_#ca4343]" style={{ background: "#ca4343" }} /> Errors</span>
           </div>
         </div>
+        
         {metrics.length < 2 ? (
-          <div className="text-center text-sm py-8" style={{ color: "#646669" }}>not enough data</div>
+          <div className="flex flex-col items-center justify-center py-20 text-[#646669] gap-4">
+            <BarChart3 size={48} className="opacity-20" />
+            <p className="font-medium tracking-wide">Not enough data to construct graph</p>
+          </div>
         ) : (
-          <div className="relative w-full" style={{ height: 140 }}>
-            {/* Y axis ticks */}
-            <div className="absolute left-0 top-0 bottom-0 w-10 flex flex-col justify-between text-right pr-2">
-              {ticks.map((t) => (
-                <span key={t.val} className="text-[9px]" style={{ color: "#4a4c4f" }}>{t.val}</span>
-              ))}
+          <div className="w-full h-[250px] sm:h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData} margin={{ top: 20, right: 0, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorWpm" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#e2b714" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#e2b714" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorAcc" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#7ec984" stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor="#7ec984" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorErr" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ca4343" stopOpacity={0.4}/>
+                    <stop offset="95%" stopColor="#ca4343" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#3a3c3f" vertical={false} opacity={0.5} />
+                <XAxis 
+                  dataKey="time" 
+                  stroke="#646669" 
+                  tick={{ fill: '#646669', fontSize: 11 }} 
+                  tickLine={false} 
+                  axisLine={false}
+                  minTickGap={30}
+                />
+                <YAxis 
+                  yAxisId="left" 
+                  stroke="#646669" 
+                  tick={{ fill: '#646669', fontSize: 11 }} 
+                  tickLine={false} 
+                  axisLine={false}
+                  tickCount={6}
+                />
+                <YAxis 
+                  yAxisId="right" 
+                  orientation="right" 
+                  stroke="#646669" 
+                  tick={{ fill: '#646669', fontSize: 11 }} 
+                  tickLine={false} 
+                  axisLine={false}
+                  domain={[0, 100]}
+                  hide
+                />
+                <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#646669', strokeWidth: 1, strokeDasharray: '4 4' }} />
+                
+                <Area yAxisId="left" type="monotone" dataKey="wpm" name="WPM" stroke="#e2b714" strokeWidth={3} fillOpacity={1} fill="url(#colorWpm)" activeDot={{ r: 6, fill: '#e2b714', stroke: '#1e1e1e', strokeWidth: 2 }} />
+                <Area yAxisId="right" type="monotone" dataKey="accuracy" name="Accuracy" stroke="#7ec984" strokeWidth={2} fillOpacity={1} fill="url(#colorAcc)" activeDot={{ r: 5, fill: '#7ec984', stroke: '#1e1e1e', strokeWidth: 2 }} />
+                <Area yAxisId="left" type="monotone" dataKey="errors" name="Errors" stroke="#ca4343" strokeWidth={2} fillOpacity={1} fill="url(#colorErr)" activeDot={{ r: 5, fill: '#ca4343', stroke: '#1e1e1e', strokeWidth: 2 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* ── WPM Distribution ── */}
+        {wpmData.length >= 5 && (
+          <div className="rounded-2xl p-6 sm:p-8 bg-[#2c2e31]/60 border border-[#3a3c3f]/50 backdrop-blur w-full">
+            <div className="text-lg font-bold mb-6 pb-4 border-b border-[#3a3c3f]/30" style={{ color: "#d1d0c5" }}>
+              WPM Distribution
             </div>
-            <div className="absolute left-10 right-0 top-0 bottom-0">
-              <svg viewBox={`0 0 600 120`} className="w-full h-full" preserveAspectRatio="none">
-                {/* Grid lines */}
-                {ticks.map((t) => (
-                  <line key={t.val} x1="0" y1={t.y} x2="600" y2={t.y}
-                    stroke="#3a3c3f" strokeWidth="1" strokeDasharray="4,4" />
-                ))}
-                <GraphLine data={wpmData} color="#e2b714" label="wpm" max={maxWpm} />
-                <GraphLine data={accData} color="#7ec984" label="acc" max={100} />
-                <GraphLine data={errData.map(v => (v / maxErr) * maxWpm)} color="#ca4343" label="err" max={maxWpm} />
-              </svg>
+            <div className="w-full h-[180px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={distData} margin={{ top: 10, right: 0, left: -25, bottom: 0 }}>
+                  <XAxis dataKey="wpmAt" stroke="#646669" tick={{ fill: '#646669', fontSize: 11 }} tickLine={false} axisLine={false} />
+                  <YAxis stroke="#646669" tick={{ fill: '#646669', fontSize: 11 }} tickLine={false} axisLine={false} tickCount={4} />
+                  <Tooltip content={<DistTooltip />} cursor={{ fill: '#3a3c3f', opacity: 0.2 }} />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                    {distData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
         )}
-        {/* X axis */}
-        <div className="flex justify-between text-[9px] mt-1 ml-10" style={{ color: "#4a4c4f" }}>
-          <span>0s</span>
-          <span>{Math.round(metrics.length / 2)}s</span>
-          <span>{metrics.length}s</span>
-        </div>
+
+        {/* ── Error Heatmap ── */}
+        {wordResults.filter((w) => !w.correct).length > 0 ? (
+          <div className="rounded-2xl p-6 sm:p-8 bg-[#2c2e31]/60 border border-[#3a3c3f]/50 backdrop-blur w-full flex flex-col">
+            <div className="text-lg font-bold mb-6 pb-4 border-b border-[#3a3c3f]/30 text-[#d1d0c5] flex items-center justify-between">
+              Missed Words
+              <span className="text-xs font-medium text-[#ca4343] bg-[#ca4343]/10 px-2 py-1 rounded-md">{wordResults.filter(w => !w.correct).length} total</span>
+            </div>
+            <div className="flex flex-wrap gap-2.5 overflow-y-auto pr-2 custom-scrollbar flex-1 max-h-[180px]">
+              {wordResults.filter((w) => !w.correct).slice(0, 40).map((w, i) => (
+                <div key={i} className="flex items-center text-[13px] px-3 py-1.5 rounded-lg bg-[#ca4343]/10 border border-[#ca4343]/30 text-[#ca4343] group transition-colors hover:bg-[#ca4343]/20">
+                  <span className="opacity-60 line-through font-mono tracking-tight">{w.typed || "—"}</span>
+                  <span className="mx-2 opacity-50 group-hover:translate-x-0.5 transition-transform">→</span>
+                  <span className="font-semibold">{w.word}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl p-6 sm:p-8 bg-[#2c2e31]/60 border border-[#3a3c3f]/50 backdrop-blur w-full flex flex-col justify-center items-center text-center">
+            <div className="w-16 h-16 rounded-full bg-[#7ec984]/20 flex items-center justify-center mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#7ec984" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+            <div className="text-xl font-bold text-[#7ec984] mb-1">Perfect Accuracy!</div>
+            <div className="text-sm text-[#646669]">You didn't miss a single word.</div>
+          </div>
+        )}
       </div>
 
-      {/* Error heatmap — words with mistakes */}
-      {wordResults.filter((w) => !w.correct).length > 0 && (
-        <div className="rounded-xl p-5" style={{ background: "#2c2e31" }}>
-          <div className="text-sm font-semibold mb-3" style={{ color: "#d1d0c5" }}>missed words</div>
-          <div className="flex flex-wrap gap-2">
-            {wordResults.filter((w) => !w.correct).slice(0, 50).map((w, i) => (
-              <div key={i} className="text-xs px-2 py-1 rounded" style={{ background: "#ca43431a", color: "#ca4343", border: "1px solid #ca434333" }}>
-                <span style={{ opacity: 0.5, textDecoration: "line-through" }}>{w.typed || "—"}</span>
-                <span className="ml-1">→</span>
-                <span className="ml-1">{w.word}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* WPM distribution bar chart */}
-      {wpmData.length >= 5 && (
-        <div className="rounded-xl p-5" style={{ background: "#2c2e31" }}>
-          <div className="text-sm font-semibold mb-4" style={{ color: "#d1d0c5" }}>wpm distribution</div>
-          <div className="flex items-end gap-1 h-20">
-            {(() => {
-              const buckets = 20;
-              const min = Math.min(...wpmData);
-              const range = (maxWpm - min) || 1;
-              const counts = new Array(buckets).fill(0);
-              wpmData.forEach(v => {
-                const b = Math.min(Math.floor(((v - min) / range) * buckets), buckets - 1);
-                counts[b]++;
-              });
-              const maxCount = Math.max(...counts, 1);
-              return counts.map((c, i) => {
-                const h = (c / maxCount) * 100;
-                const wpmAt = Math.round(min + (i / buckets) * range);
-                return (
-                  <div key={i} className="flex-1 flex flex-col items-center group relative">
-                    <div
-                      className="w-full rounded-t transition-all"
-                      style={{ height: `${h}%`, background: `hsla(${43 + i * 2}, 80%, ${45 + i}%, 0.8)` }}
-                    />
-                    <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-[9px] bg-black/80 px-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap" style={{ color: "#d1d0c5" }}>
-                      {wpmAt} wpm: {c}x
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-          <div className="flex justify-between text-[9px] mt-1" style={{ color: "#4a4c4f" }}>
-            <span>{Math.min(...wpmData)} wpm</span>
-            <span>{maxWpm} wpm</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
