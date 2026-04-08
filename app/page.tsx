@@ -96,12 +96,14 @@ function ResultsScreen({
   song,
   wordResults,
   metrics,
+  usedAutoPilot,
   onRetry,
   onNew,
 }: {
   song: SearchSong;
   wordResults: WordResult[];
   metrics: SecondMetric[];
+  usedAutoPilot: boolean;
   onRetry: () => void;
   onNew: () => void;
 }) {
@@ -169,7 +171,14 @@ function ResultsScreen({
           </div>
         )}
         <div className="flex flex-col justify-center text-center sm:text-left z-10 flex-1">
-          <div className="text-sm font-semibold tracking-widest uppercase mb-1" style={{ color: "#e2b714" }}>Result Summary</div>
+          <div className="flex items-center justify-center sm:justify-start gap-2 mb-1">
+            <div className="text-sm font-semibold tracking-widest uppercase" style={{ color: "#e2b714" }}>Result Summary</div>
+            {usedAutoPilot && (
+              <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-[#e2b714]/20 text-[#e2b714] border border-[#e2b714]/30 uppercase tracking-wider">
+                Auto Pilot
+              </span>
+            )}
+          </div>
           <div className="text-3xl sm:text-4xl font-black tracking-tight text-white mb-2 line-clamp-1">{song.name}</div>
           <div className="text-lg font-medium" style={{ color: "#a0a09b" }}>{song.artistName}</div>
         </div>
@@ -368,6 +377,7 @@ export default function Home() {
   const [lyricsProvider, setLyricsProvider] = useState<LyricsProvider>("auto");
   const [showProviderMenu, setShowProviderMenu] = useState(false);
   const [lyricsSource, setLyricsSource] = useState("");
+  const [isAutoPilot, setIsAutoPilot] = useState(false);
 
   /* ── Typing state ── */
   const [activeLineIdx, setActiveLineIdx] = useState(0);
@@ -378,6 +388,7 @@ export default function Home() {
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [lastMetricSecond, setLastMetricSecond] = useState(-1);
   const [sessionErrors, setSessionErrors] = useState(0);
+  const [usedAutoPilot, setUsedAutoPilot] = useState(false);
   const typingRef = useRef<HTMLInputElement>(null);
   const lyricsScrollRef = useRef<HTMLDivElement>(null);
 
@@ -390,6 +401,7 @@ export default function Home() {
   const wordResultsRef = useRef<WordResult[]>([]);
   const currentTimeRef = useRef(0);
   const sessionErrorsRef = useRef(0);
+  const isAutoPilotRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => { activeLineIdxRef.current = activeLineIdx; }, [activeLineIdx]);
@@ -400,6 +412,7 @@ export default function Home() {
   useEffect(() => { wordResultsRef.current = wordResults; }, [wordResults]);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   useEffect(() => { sessionErrorsRef.current = sessionErrors; }, [sessionErrors]);
+  useEffect(() => { isAutoPilotRef.current = isAutoPilot; }, [isAutoPilot]);
 
   /* ── View ── */
   const [showResults, setShowResults] = useState(false);
@@ -477,6 +490,7 @@ export default function Home() {
     setSessionStartTime(null);
     setLastMetricSecond(-1);
     setSessionErrors(0);
+    setUsedAutoPilot(isAutoPilot);
     setPlayerError("");
     setSongLoading(true);
     setIsPlaying(false);
@@ -668,20 +682,111 @@ export default function Home() {
         return;
       }
 
-      // Printable character
+        // Printable character
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
-        setTypedBuffer(prev => {
-          const next = prev + e.key;
-          typedBufferRef.current = next;
-          return next;
-        });
+        setTypedBuffer(prev => prev + e.key);
       }
     };
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [searchOpen, activeSong, songLoading, showResults]);
+
+  /* ════════════════════════════════════════
+     AUTO PILOT LOGIC
+  ════════════════════════════════════════ */
+  useEffect(() => {
+    if (!isAutoPilot || !isPlaying || !activeSong || songLoading || showResults) return;
+
+    let frameId: number;
+
+    const processAutoPilot = () => {
+      frameId = requestAnimationFrame(processAutoPilot);
+
+      const line = lyricsRef.current[activeLineIdxRef.current];
+      if (!line || line.wordTokens.length === 0) return;
+
+      const wordToken = line.wordTokens[activeWordIdxRef.current];
+      if (!wordToken) return;
+
+      const t = currentTimeRef.current;
+      
+      // Calculate how many characters we should have typed by now
+      const duration = Math.max(wordToken.endTime - wordToken.startTime, 0.1);
+      const wordLen = wordToken.word.length;
+      
+      // Buffer a little bit so it finishes the word slightly before the end time
+      // to leave room for space, but typing it precisely linearly is fine.
+      let expectedChars = 0;
+      if (t > wordToken.endTime - 0.05) {
+        expectedChars = wordLen + 1; // full word + space
+      } else if (t > wordToken.startTime) {
+        let fraction = (t - wordToken.startTime) / duration;
+        expectedChars = Math.floor(fraction * (wordLen + 1)); // include space
+      }
+
+      const currentBufferLen = typedBufferRef.current.length;
+
+      // Type characters if we are behind expected
+      if (expectedChars > currentBufferLen) {
+        setUsedAutoPilot(true);
+        // Start session if not started
+        if (!sessionStartTimeRef.current) {
+          const now = Date.now();
+          sessionStartTimeRef.current = now;
+          setSessionStartTime(now);
+          setUsedAutoPilot(true);
+        }
+
+        if (currentBufferLen === wordLen) {
+          // Time to press Space
+          const typed = typedBufferRef.current;
+          const targetWord = wordToken.word;
+          const correct = typed.trim().toLowerCase() === targetWord.toLowerCase();
+          if (!correct) {
+            sessionErrorsRef.current += 1;
+            setSessionErrors(n => n + 1);
+          }
+          const start = sessionStartTimeRef.current!;
+          const elapsedMin = (Date.now() - start) / 1000 / 60;
+          const prevCorrect = wordResultsRef.current.filter(w => w.correct).length + (correct ? 1 : 0);
+          const wpm = elapsedMin > 0 ? Math.round(prevCorrect / 5 / elapsedMin) : 0;
+
+          const result: WordResult = {
+            word: targetWord,
+            typed: typed.trim(),
+            correct,
+            wpm,
+            time: t,
+            lineIdx: activeLineIdxRef.current,
+          };
+          
+          wordResultsRef.current = [...wordResultsRef.current, result];
+          setWordResults(wordResultsRef.current);
+
+          const nextWordIdx = activeWordIdxRef.current + 1;
+          if (nextWordIdx < line.wordTokens.length) {
+            activeWordIdxRef.current = nextWordIdx;
+            setActiveWordIdx(nextWordIdx);
+          }
+          
+          typedBufferRef.current = '';
+          setTypedBuffer('');
+        } else if (currentBufferLen < wordLen) {
+          // Add the next character
+          const nextChar = wordToken.word[currentBufferLen];
+          if (nextChar) {
+            typedBufferRef.current += nextChar;
+            setTypedBuffer(typedBufferRef.current);
+          }
+        }
+      }
+    };
+
+    frameId = requestAnimationFrame(processAutoPilot);
+    return () => cancelAnimationFrame(frameId);
+  }, [isAutoPilot, isPlaying, activeSong, songLoading, showResults]);
 
   const togglePlay = (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -709,6 +814,7 @@ export default function Home() {
     setSessionStartTime(null);
     setLastMetricSecond(-1);
     setSessionErrors(0);
+    setUsedAutoPilot(isAutoPilot);
     setShowResults(false);
   };
 
@@ -826,6 +932,19 @@ export default function Home() {
           <span className="font-bold text-sm tracking-tight" style={{ color: "#e2b714" }}>musictype</span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Auto Pilot Toggle */}
+          <button
+            onClick={(e) => { e.stopPropagation(); setIsAutoPilot(v => !v); }}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors"
+            style={{ 
+              background: isAutoPilot ? "#e2b714" : "#2c2e31", 
+              color: isAutoPilot ? "#1e1e1e" : "#646669", 
+              border: "1px solid #3a3c3f" 
+            }}
+          >
+            Auto Pilot
+          </button>
+          
           {/* Provider selector */}
           <div className="relative">
             <button
@@ -961,6 +1080,7 @@ export default function Home() {
               song={activeSong}
               wordResults={wordResults}
               metrics={sessionMetrics}
+              usedAutoPilot={usedAutoPilot}
               onRetry={handleReset}
               onNew={() => setSearchOpen(true)}
             />
